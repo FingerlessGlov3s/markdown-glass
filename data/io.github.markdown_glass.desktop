@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Markdown Glass
+GenericName=Markdown Viewer
+Comment=View markdown files
+Exec=markdown-glass %F
+Icon=io.github.markdown_glass
+Terminal=false
+StartupNotify=true
+Categories=Qt;Office;Viewer;
+MimeType=text/markdown;text/x-markdown;
+Keywords=markdown;md;viewer;readme;

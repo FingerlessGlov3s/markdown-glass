@@ -1,0 +1,59 @@
+# Static analysis for src/ (run scripts/lint.sh). Chosen to find real bugs and
+# clear improvements without fighting Qt idioms. Every check switched off has
+# its reason beside it; re-enable one and run the lint before deciding it is
+# still needed.
+Checks: >
+  -*,
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-narrowing-conversions,
+  -bugprone-exception-escape,
+  cert-err33-c,
+  clang-analyzer-*,
+  -clang-analyzer-cplusplus.NewDeleteLeaks,
+  -clang-analyzer-optin.cplusplus.VirtualCall,
+  misc-redundant-expression,
+  misc-unused-using-decls,
+  misc-definitions-in-headers,
+  modernize-use-override,
+  modernize-use-nullptr,
+  modernize-use-equals-default,
+  modernize-loop-convert,
+  modernize-use-emplace,
+  performance-*,
+  -performance-enum-size,
+  readability-container-size-empty,
+  readability-redundant-string-init,
+  readability-inconsistent-declaration-parameter-name,
+  readability-misleading-indentation,
+  readability-redundant-control-flow,
+  readability-simplify-boolean-expr,
+  readability-delete-null-pointer
+# Why the checks above are off:
+# - bugprone-easily-swappable-parameters: nine findings, all pairs such as
+#   (path, anchor), (name, tooltip) and (start, length) with a handful of
+#   callers each; a strong type for every one would be more code than the
+#   mistake it prevents, and the parameter names are the guard.
+# - bugprone-narrowing-conversions: the same decision as leaving -Wconversion
+#   out of MDGLASS_WARNINGS (CMakeLists.txt): Qt mixes int and qreal so
+#   freely that the findings bury real problems.
+# - bugprone-exception-escape: Qt does not throw, so every slot and
+#   destructor would need a comment saying so.
+# - clang-analyzer-cplusplus.NewDeleteLeaks: widgets created with `new` are
+#   owned by their Qt parent, which the analyser does not know.
+# - clang-analyzer-optin.cplusplus.VirtualCall: Qt widget constructors call
+#   virtual functions (setWidget, sizeHint) on purpose; the base
+#   implementation is the one wanted during construction.
+# - performance-enum-size: every enum it flags sits beside ints and pointers
+#   in its struct, so a one-byte base type saves nothing after alignment, and
+#   Span::Flag keeps its quint16 for flags still to come.
+# Not enabled: readability-magic-numbers (tried with IgnoredIntegerValues
+# 0;1;2;-1 and IgnorePowersOf2IntegerValues). What it flags is the theme's
+# colour components and tints, the half-pixel snapping offsets of thin
+# outlines, polyline point counts and surrogate ranges: a name for each would
+# say less than the literal. Spacing and sizes are named in layoutinternal.h
+# and at the top of each view file instead.
+WarningsAsErrors: ''
+# Our own code only: /src/src/... in the container (scripts/lint.sh mounts the
+# checkout at /src), <checkout>/src/... on a host build.
+HeaderFilterRegex: '(^|/)src/(app|highlight|images|layout|model|print|ui|view)/'

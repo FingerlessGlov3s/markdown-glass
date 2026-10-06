@@ -1,0 +1,51 @@
+name: Distribution watch
+
+# Once a month, checks the package targets against endoflife.date (see
+# scripts/distro-watch.py): new releases to add, and targets past or near
+# their end of life. Findings go into a single issue labelled distro-watch,
+# which is updated rather than duplicated, and closed once nothing is left.
+
+on:
+  schedule:
+    - cron: '17 6 1 * *'
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  report:
+    name: Check distribution releases
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read # check out the scripts
+      issues: write  # open, update or close the report issue
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Report
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          status=0
+          scripts/distro-watch.py > report.md || status=$?
+          cat report.md
+          if [[ $status -ne 0 && $status -ne 3 ]]; then
+            exit "$status"
+          fi
+          open=$(gh issue list --repo "$GITHUB_REPOSITORY" --label distro-watch --state open \
+            --json number --jq '.[0].number // empty')
+          if [[ $status -eq 3 ]]; then
+            if [[ -n "$open" ]]; then
+              gh issue edit "$open" --repo "$GITHUB_REPOSITORY" --body-file report.md
+            else
+              gh label create distro-watch --repo "$GITHUB_REPOSITORY" --force \
+                --description "Package targets to add or retire" --color c5def5
+              gh issue create --repo "$GITHUB_REPOSITORY" --label distro-watch \
+                --title "Distribution releases to review" --body-file report.md
+            fi
+          elif [[ -n "$open" ]]; then
+            gh issue close "$open" --repo "$GITHUB_REPOSITORY" --comment "Every package target is current again."
+          fi

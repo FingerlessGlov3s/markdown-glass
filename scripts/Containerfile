@@ -1,0 +1,21 @@
+# Development container for Markdown Glass (Fedora 44, Qt 6 / KF6), used by
+# scripts/container.sh and so by build.sh, test.sh, coverage.sh, lint.sh,
+# fuzz.sh, format.sh and screenshot.sh. Distribution packages are built by
+# scripts/package.sh in each distribution's own container instead.
+# The Breeze style, icons and Noto fonts are only there so that offscreen
+# screenshots look like a Plasma desktop.
+# Dependabot (.github/dependabot.yml) proposes updates to this base image.
+FROM registry.fedoraproject.org/fedora:44
+
+RUN dnf -y install \
+        gcc-c++ clang compiler-rt libasan libubsan \
+        cmake ninja-build git-core \
+        qt6-qtbase-devel qt6-qtsvg-devel qt6-qtimageformats \
+        kf6-syntax-highlighting-devel extra-cmake-modules \
+        rpm-build rpmlint annobin-annocheck clang-tools-extra gcovr ShellCheck \
+        dejavu-sans-fonts dejavu-sans-mono-fonts \
+        plasma-breeze-qt6 breeze-icon-theme google-noto-sans-fonts \
+    && dnf clean all
+
+ENV QT_QPA_PLATFORM=offscreen
+WORKDIR /src

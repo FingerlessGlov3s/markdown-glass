@@ -1,0 +1,6 @@
+<RCC>
+    <qresource prefix="/licenses">
+        <file alias="markdown-glass.txt">../LICENSE</file>
+        <file alias="cmark-gfm.txt">../third_party/cmark-gfm/COPYING</file>
+    </qresource>
+</RCC>

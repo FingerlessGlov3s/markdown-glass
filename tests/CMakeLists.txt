@@ -1,0 +1,31 @@
+function(mdglass_test name)
+    add_executable(${name} ${name}.cpp)
+    target_link_libraries(${name} PRIVATE mdglass Qt6::Test)
+    target_compile_options(${name} PRIVATE ${MDGLASS_WARNINGS})
+    target_compile_definitions(${name} PRIVATE SAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/samples")
+    add_test(NAME ${name} COMMAND ${name})
+    # Each suite has its own settings directory, so suites can run in parallel.
+    set_tests_properties(${name} PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/config/${name}"
+        TIMEOUT 120)
+endfunction()
+
+mdglass_test(tst_parser)
+mdglass_test(tst_links)
+mdglass_test(tst_config)
+mdglass_test(tst_layout)
+mdglass_test(tst_images)
+mdglass_test(tst_hostile)
+mdglass_test(tst_view)
+mdglass_test(tst_dialogs)
+mdglass_test(tst_pane)
+mdglass_test(tst_navigation)
+mdglass_test(tst_viewinput)
+mdglass_test(tst_mainwindow)
+mdglass_test(tst_instance)
+mdglass_test(tst_cli)
+# These also run the real program, to test start-up and the command line.
+foreach(name tst_cli tst_instance)
+    target_compile_definitions(${name} PRIVATE MDGLASS_BINARY="$<TARGET_FILE:markdown-glass>")
+    add_dependencies(${name} markdown-glass)
+endforeach()

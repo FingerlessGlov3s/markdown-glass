@@ -1,0 +1,8 @@
+# Filters for rpmlint (scripts/package/build-rpm.sh passes this with -r).
+# Only known false positives go here; everything else rpmlint says is left
+# visible in the build log.
+
+# The description is written in British English, which rpmlint's en_US
+# dictionary does not know, and "scrollbar" is the usual spelling in Qt.
+addFilter("spelling-error .*\bcolour\b")
+addFilter("spelling-error .*\bscrollbar\b")

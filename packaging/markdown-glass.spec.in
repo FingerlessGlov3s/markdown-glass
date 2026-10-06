@@ -1,0 +1,81 @@
+# Template: scripts/package/build-rpm.sh fills in the @...@ values from
+# CMakeLists.txt (version), data/description.txt (summary, description) and
+# CHANGELOG.md (changelog).
+Name:           markdown-glass
+Version:        @VERSION@
+Release:        1%{?dist}
+Summary:        @SUMMARY@
+
+# Markdown Glass itself is BSD-3-Clause. The bundled cmark-gfm is
+# BSD-2-Clause AND MIT.
+License:        BSD-3-Clause AND BSD-2-Clause AND MIT
+URL:            https://github.com/FingerlessGlov3s/markdown-glass
+Source0:        %{name}-%{version}.tar.gz
+
+BuildRequires:  cmake
+BuildRequires:  gcc-c++
+BuildRequires:  cmake(Qt6Core)
+BuildRequires:  cmake(Qt6Gui)
+BuildRequires:  cmake(Qt6Widgets)
+BuildRequires:  cmake(Qt6PrintSupport)
+BuildRequires:  cmake(Qt6Network)
+BuildRequires:  cmake(Qt6Test)
+BuildRequires:  cmake(KF6SyntaxHighlighting)
+BuildRequires:  desktop-file-utils
+# The test suite in %%check decodes SVG images, which needs the SVG plugin.
+%if 0%{?suse_version}
+BuildRequires:  libQt6Svg6
+%else
+BuildRequires:  qt6-qtsvg
+%endif
+
+# Image formats beyond Qt's built-in PNG/JPEG/GIF. Package names differ
+# between the Fedora/RHEL family and openSUSE.
+%if 0%{?suse_version}
+Requires:       libQt6Svg6
+Requires:       qt6-imageformats
+%else
+Requires:       qt6-qtsvg
+Requires:       qt6-qtimageformats
+%endif
+Requires:       hicolor-icon-theme
+
+# GitHub's markdown parser is not packaged in Fedora and is linked statically.
+# All licence texts are compiled into the binary and shown in the About window.
+Provides:       bundled(cmark-gfm) = 0.29.0.gfm.13
+
+%description
+@DESCRIPTION@
+
+%prep
+%autosetup
+
+%build
+# The docdir is named: CMake's default is /usr/share/doc/<name>, which is not
+# where openSUSE keeps documentation.
+%cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_INSTALL_DOCDIR=%{_docdir}/%{name}
+%cmake_build
+
+%install
+%cmake_install
+
+%check
+desktop-file-validate %{buildroot}%{_datadir}/applications/io.github.markdown_glass.desktop
+export QT_QPA_PLATFORM=offscreen
+%ctest
+
+%files
+# The licence texts and README are installed by CMake, so they are listed by
+# path and only marked, rather than installed a second time by %%license and
+# %%doc with bare file names.
+%license %{_docdir}/%{name}/LICENSE
+%license %{_docdir}/%{name}/LICENSE.cmark-gfm
+%doc %{_docdir}/%{name}/README.md
+%{_bindir}/markdown-glass
+%{_datadir}/applications/io.github.markdown_glass.desktop
+%{_datadir}/metainfo/io.github.markdown_glass.metainfo.xml
+%{_datadir}/icons/hicolor/scalable/apps/io.github.markdown_glass.svg
+
+%changelog
+# Generated from CHANGELOG.md.
+@CHANGELOG@

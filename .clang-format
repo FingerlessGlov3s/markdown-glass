@@ -1,0 +1,60 @@
+# C++ formatting for src/, tests/ and fuzz/. Run scripts/format.sh to apply.
+# Close to the Qt/KDE style the code was written in: 4 spaces, 120 columns,
+# function and class braces on their own line, "Type *name".
+BasedOnStyle: WebKit
+ColumnLimit: 120
+IndentWidth: 4
+PointerAlignment: Right
+ReferenceAlignment: Right
+
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterClass: true
+  AfterStruct: false
+  AfterUnion: false
+  AfterEnum: false
+  AfterFunction: true
+  AfterNamespace: false
+  AfterControlStatement: Never
+  BeforeElse: false
+  BeforeCatch: false
+  BeforeLambdaBody: false
+  SplitEmptyFunction: false
+  SplitEmptyRecord: false
+
+BreakConstructorInitializers: BeforeComma
+ConstructorInitializerAllOnOneLineOrOnePerLine: false
+PackConstructorInitializers: Never
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortLambdasOnASingleLine: All
+AllowShortEnumsOnASingleLine: true
+AllowShortBlocksOnASingleLine: Empty
+BreakBeforeBinaryOperators: NonAssignment
+AlignAfterOpenBracket: Align
+AlignOperands: DontAlign
+AlignTrailingComments: true
+SpacesBeforeTrailingComments: 1
+NamespaceIndentation: None
+FixNamespaceComments: true
+IndentCaseLabels: false
+Cpp11BracedListStyle: true
+InsertBraces: false
+KeepEmptyLinesAtTheStartOfBlocks: false
+MaxEmptyLinesToKeep: 1
+# Never split string literals: it breaks URLs and makes text hard to grep.
+BreakStringLiterals: false
+
+# Own header first, then project headers (one block, whichever module),
+# then Qt/KDE, then the standard library.
+SortIncludes: CaseSensitive
+IncludeBlocks: Regroup
+IncludeCategories:
+  - Regex: '^"'
+    Priority: 2
+  - Regex: '^<(Q|K|cmark|ksyntax)'
+    Priority: 3
+  - Regex: '^<'
+    Priority: 4
+IncludeIsMainRegex: '$'

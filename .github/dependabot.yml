@@ -1,0 +1,30 @@
+# Proposes updates to what the build pins: the commit-pinned actions in
+# .github/workflows/, the base image of scripts/Containerfile, and the
+# vendored cmark-gfm submodule. Monthly and grouped per ecosystem, so updates
+# cost one CI run each.
+#
+# A submodule pull request is a notification, not an update to merge as is:
+# the parser is moved on by hand, since its version is also written in
+# packaging/markdown-glass.spec.in (Provides: bundled(cmark-gfm)) and
+# docs/BUILDING.md, and a new parser deserves a run of the hostile tests.
+# New distribution releases are reported by distro-watch.yml instead.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ['*']
+  - package-ecosystem: docker
+    directory: /scripts
+    schedule:
+      interval: monthly
+    groups:
+      containers:
+        patterns: ['*']
+  - package-ecosystem: gitsubmodule
+    directory: /
+    schedule:
+      interval: monthly

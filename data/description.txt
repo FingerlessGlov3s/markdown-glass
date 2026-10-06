@@ -1,0 +1,7 @@
+Simple markdown only viewer for Qt based desktop environments
+
+Markdown Glass shows markdown files the way GitHub renders them, in a native
+Qt window that follows the desktop colour scheme. It offers one-click copying
+of code, syntax highlighting, an outline sidebar, a document preview on the
+scrollbar, a reading width limit, printing and automatic reload. It cannot
+edit files.
