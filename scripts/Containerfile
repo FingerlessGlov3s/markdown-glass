@@ -5,7 +5,9 @@
 # The Breeze style, icons and Noto fonts are only there so that offscreen
 # screenshots look like a Plasma desktop.
 # Dependabot (.github/dependabot.yml) proposes updates to this base image.
-FROM registry.fedoraproject.org/fedora:44
+# Fedora's own image, from its Quay mirror: Dependabot may only contact a
+# fixed list of registries, and registry.fedoraproject.org is not on it.
+FROM quay.io/fedora/fedora:44
 
 RUN dnf -y install \
         gcc-c++ clang compiler-rt libasan libubsan \
