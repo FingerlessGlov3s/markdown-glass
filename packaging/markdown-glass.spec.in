@@ -42,7 +42,8 @@ Requires:       hicolor-icon-theme
 
 # GitHub's markdown parser is not packaged in Fedora and is linked statically.
 # All licence texts are compiled into the binary and shown in the About window.
-Provides:       bundled(cmark-gfm) = 0.29.0.gfm.13
+# A snapshot after the 0.29.0.gfm.13 tag; "^" sorts it after that release.
+Provides:       bundled(cmark-gfm) = 0.29.0.gfm.13^20260928git27d942c
 
 %description
 @DESCRIPTION@

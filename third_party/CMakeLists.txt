@@ -1,5 +1,7 @@
 # cmark-gfm: GitHub's markdown parser, pinned as a git submodule and linked statically.
-set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+# Its CMakeLists.txt asks for CMake 3.5, which newer CMake warns it will stop
+# supporting; the parser builds unchanged under 3.10 policies, so ask for those.
+set(CMAKE_POLICY_VERSION_MINIMUM 3.10)
 set(CMARK_TESTS OFF CACHE BOOL "" FORCE)
 set(CMARK_SHARED OFF CACHE BOOL "" FORCE)
 set(CMARK_STATIC ON CACHE BOOL "" FORCE)

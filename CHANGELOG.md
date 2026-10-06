@@ -46,6 +46,8 @@ Safer handling of untrusted documents.
   keep them in their anchors.
 - Printing on paper too small for the footer, or to a printer reporting no
   resolution, no longer hangs.
+- The markdown parser is updated to fix undefined behaviour when checking
+  automatic links.
 
 ## [0.1.0] - 2026-10-05
 

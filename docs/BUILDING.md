@@ -227,8 +227,9 @@ ctest --test-dir build/default
   plugins at run time.
 - KDE Frameworks 6 SyntaxHighlighting.
 - [cmark-gfm](https://github.com/github/cmark-gfm), GitHub's markdown parser,
-  vendored as a git submodule in `third_party/`, pinned to 0.29.0.gfm.13 and
-  linked statically.
+  vendored as a git submodule in `third_party/`, pinned to commit `27d942c`
+  (0.29.0.gfm.13 plus a fix for undefined behaviour in autolink parsing,
+  not yet in a tagged release) and linked statically.
 
 ## Code structure
 
