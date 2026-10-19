@@ -11,6 +11,8 @@ progress goes under `## [Unreleased]`, which is not published.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-19
+
 - Very large documents open about three times faster and re-flow after a
   window resize about five times faster, using several processor cores.
 - A document opening in a new window appears straight away at the window's
