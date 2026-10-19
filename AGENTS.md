@@ -83,7 +83,12 @@ Each fact is written once and generated everywhere else:
 - **Release notes:** `CHANGELOG.md`, one `## [version] - YYYY-MM-DD` section
   per release. `scripts/package/changelog.sh` turns it into the RPM
   `%changelog`, the Debian changelog, the AppStream release list and the
-  GitHub release text.
+  GitHub release text. A user-visible change adds its bullet under
+  `## [Unreleased]` in the same commit. Releasing renames that section to
+  the version, dated the day the tag is pushed, so right after a release
+  `[Unreleased]` is empty: never list anything there that a tag already
+  contains (check with `git log <last tag>..HEAD`). The steps are in
+  docs/BUILDING.md.
 - **Package summary and description:** `data/description.txt`.
 
 The RPM spec (`packaging/markdown-glass.spec.in`) and the AppStream file

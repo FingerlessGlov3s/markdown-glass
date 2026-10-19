@@ -150,13 +150,29 @@ To publish a release:
 1. Set the new version in `project()` in `CMakeLists.txt`. This is the only
    place the version is written.
 2. In `CHANGELOG.md`, rename `## [Unreleased]` to `## [0.2.0] - YYYY-MM-DD`
-   (today's date) and start a new empty `## [Unreleased]` above it.
-3. Commit, then tag and push:
+   and start a new empty `## [Unreleased]` above it. Rename the section,
+   rather than writing a new one beside it: everything under `[Unreleased]`
+   is in the commit being tagged, so all of it belongs to this release, and
+   anything left behind would wrongly appear as still to come. The date is
+   the day the tag is pushed (UTC), which is when the release is published.
+3. Read what will be published before tagging. The notes should hold
+   everything new since the last release and nothing older:
 
 ```bash
+scripts/package/changelog.sh notes 0.2.0     # the GitHub release text
+git log --oneline v0.1.0..HEAD               # what changed since the last tag
+```
+
+4. Commit, push `main`, then tag that commit and push the tag:
+
+```bash
+git push origin main
 git tag v0.2.0
 git push origin v0.2.0
 ```
+
+A published section is a record of what shipped: correct a mistake in it in
+its own commit, rather than mixing the fix into other changes.
 
 The first job checks that the tag matches `CMakeLists.txt` and that
 `CHANGELOG.md` has a dated section for it; if not, nothing else runs: the
