@@ -38,6 +38,9 @@ class TestLayout : public QObject
     Q_OBJECT
 private slots:
     void initTestCase() { m_theme = Theme::fromPalette(QGuiApplication::palette(), 1.0); }
+    // The highlighter caches by block address: one test's freed blocks must
+    // not answer for the next test's, as the view clears it per document.
+    void cleanup() { m_highlighter.clear(); }
     void proseAlwaysWraps();
     void codeWrapSetting();
     void highlightingOnlyWithLanguage();
@@ -304,6 +307,25 @@ void collectBlocks(const std::vector<std::unique_ptr<Block>> &list, QList<const 
     }
 }
 
+// A format range as text, for saying how two of them differ.
+QString describe(const QTextLayout::FormatRange &range)
+{
+    QStringList properties;
+    const QMap<int, QVariant> all = range.format.properties();
+    for (auto it = all.cbegin(); it != all.cend(); ++it) {
+        const QVariant &v = it.value();
+        QString value = v.toString();
+        if (v.metaType() == QMetaType::fromType<QBrush>())
+            value = v.value<QBrush>().color().name(QColor::HexArgb);
+        else if (v.metaType() == QMetaType::fromType<QFont>())
+            value = v.value<QFont>().toString();
+        else if (value.isEmpty())
+            value = QString::fromLatin1(v.typeName());
+        properties << QStringLiteral("0x%1=%2").arg(it.key(), 0, 16).arg(value);
+    }
+    return QStringLiteral("[%1+%2 %3]").arg(range.start).arg(range.length).arg(properties.join(u' '));
+}
+
 // The first difference between two layouts of the same document, or an empty
 // string when they place the same text in the same lines at the same spots.
 QString difference(const Layout &a, const Layout &b, const Document &doc)
@@ -321,8 +343,20 @@ QString difference(const Layout &a, const Layout &b, const Document &doc)
         if (x.frame != y.frame || x.separator != y.separator || x.block != y.block || x.inl != y.inl)
             return box + QStringLiteral("attributes");
         // Fonts, colours and highlighting.
-        if (x.layout.font() != y.layout.font() || x.layout.formats() != y.layout.formats())
-            return box + QStringLiteral("formats");
+        if (x.layout.font() != y.layout.font())
+            return box + QStringLiteral("font %1 / %2").arg(x.layout.font().toString(), y.layout.font().toString());
+        const QList<QTextLayout::FormatRange> fx = x.layout.formats();
+        const QList<QTextLayout::FormatRange> fy = y.layout.formats();
+        if (fx != fy) {
+            QString what = box + QStringLiteral("formats, %1 / %2 ranges").arg(fx.size()).arg(fy.size());
+            for (qsizetype r = 0; r < qMin(fx.size(), fy.size()); ++r) {
+                if (fx[r] != fy[r]) {
+                    what += QStringLiteral(", range %1: %2 / %3").arg(r).arg(describe(fx[r]), describe(fy[r]));
+                    break;
+                }
+            }
+            return what;
+        }
         if (x.layout.lineCount() != y.layout.lineCount())
             return box + QStringLiteral("line count %1 / %2").arg(x.layout.lineCount()).arg(y.layout.lineCount());
         for (int l = 0; l < x.layout.lineCount(); ++l) {
@@ -514,6 +548,14 @@ void TestLayout::highlighterCache()
     // The language's definition is remembered, not looked up again.
     QVERIFY(highlighter.highlight(*doc->blocks[2]));
     highlighter.clear();
+    QVERIFY(!highlighter.cached(cpp));
+
+    // A block with no language at the address of one highlighted earlier (a
+    // new document's block where a freed one was) is plain, as highlight()
+    // already said.
+    QVERIFY(highlighter.highlight(cpp));
+    doc->blocks[0]->language.clear();
+    QVERIFY(!highlighter.highlight(cpp));
     QVERIFY(!highlighter.cached(cpp));
 }
 

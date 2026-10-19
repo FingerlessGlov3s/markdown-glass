@@ -138,6 +138,10 @@ void CodeHighlighter::clear()
 
 const HighlightedLines *CodeHighlighter::cached(const Block &block) const
 {
+    // The same rules as highlight(), before the cache: an entry under this
+    // address may be left from another block that lived there.
+    if (block.language.isEmpty() || block.code.size() > MaxHighlightChars)
+        return nullptr;
     const auto it = m_cache.constFind(&block);
     return it == m_cache.constEnd() || it->isEmpty() ? nullptr : &*it;
 }
