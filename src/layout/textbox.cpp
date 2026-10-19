@@ -27,8 +27,33 @@ bool hasLongWord(const QString &text)
 
 } // namespace
 
+// Whether the lines from the last doLayout() are exactly what laying out
+// again at availableWidth would give. Breaking lines is most of the cost of a
+// layout, and most boxes (code lines above all) are one line that still fits,
+// so a resize only needs to re-break the text that wraps.
+bool TextBox::linesFit(qreal availableWidth, QTextOption::WrapMode mode) const
+{
+    if (!m_laidOut || mode != m_mode || !images.isEmpty())
+        return false; // images are scaled to the width
+    if (mode == QTextOption::NoWrap)
+        return true; // laid out at Unbounded width, whatever the available width
+    // A single line that fits stays one line; it only stays in the same place
+    // if it starts at the left edge, which right-to-left text does not.
+    // Trailing spaces count towards a line's natural width only while they
+    // fit, so with them the width measured before may be too small.
+    const QString &text = layout.text();
+    return layout.lineCount() == 1 && naturalWidth <= availableWidth && m_align == Qt::AlignLeft
+        && (text.isEmpty() || !text.back().isSpace()) && !text.isRightToLeft();
+}
+
 void TextBox::doLayout(qreal availableWidth, QTextOption::WrapMode mode, qreal imageMaxWidth)
 {
+    if (linesFit(availableWidth, mode)) {
+        width = availableWidth;
+        return;
+    }
+    m_laidOut = true;
+    m_mode = mode;
     const bool wrap = mode != QTextOption::NoWrap;
     width = availableWidth;
     if (imageMaxWidth < 0)

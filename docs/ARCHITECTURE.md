@@ -60,7 +60,8 @@ These are the rules most likely to be broken by a change.
    `const InlineImage *`. `CodeHighlighter` caches results keyed by
    `const Block *`. `OutlineDock` stores `const Block *` per heading.
    `DocumentView::m_toggled` (which `<details>` blocks the user opened)
-   holds `const Block *`.
+   holds `const Block *`, and so does `DocumentView::m_pendingBlock` (where
+   to scroll once a document set while the view was hidden is laid out).
 3. **So the order of replacement matters.** `DocumentView::setDocument()`
    destroys the old layout and clears the highlighter cache and toggles
    *before* the old document is released. `DocumentPane` emits
@@ -88,6 +89,20 @@ These are the rules most likely to be broken by a change.
   span for boxes that have inline text, so `hit.span >= 0` means
   `box.inl != nullptr`. Use `Hit::inlineSpan()` and `Hit::href()` rather than
   indexing `box.inl` yourself.
+- **A re-layout may take over the previous layout's text boxes.** When
+  only the width, loaded images or opened `<details>` changed,
+  `DocumentView::doLayout()` passes the old `Layout` to the new one, which
+  reuses each box that matches the block and text it is about to build and
+  re-breaks only lines the new width can change (`TextBox::linesFit()`).
+  Anything that changes how text is shaped (theme, zoom, code wrapping)
+  must clear `DocumentView::m_boxesReusable`.
+- **Large documents are laid out on several threads.** `LayoutBuilder`
+  splits the top-level blocks into parts, builds each on its own thread and
+  stacks the results. Everything that is not thread-safe is done first on
+  the UI thread (`LayoutBuilder::prepare()`): highlighting every code block
+  and asking `ImageSource` about every image. Workers only read those
+  answers. Code reached from the builder must not call `ImageSource` or
+  `CodeHighlighter::highlight()` on a worker.
 - **Code lines are split once, one way.** Layout and highlighting both use
   `md::codeLines()`, so highlighted line N matches displayed line N.
 - **Nesting is bounded twice.** The parser drops content nested deeper than

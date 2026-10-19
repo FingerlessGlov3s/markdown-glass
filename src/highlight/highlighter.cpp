@@ -16,6 +16,7 @@ namespace {
 // Limits that keep hostile or enormous code blocks from stalling the UI.
 constexpr int MaxHighlightChars = 400'000;
 constexpr int MaxHighlightLineLength = 4'000;
+constexpr qsizetype MaxRememberedLanguages = 512;
 
 // Loading the syntax index is the expensive part, so it is created on first
 // use and shared; documents without fenced languages never pay for it.
@@ -62,10 +63,19 @@ KSyntaxHighlighting::Definition definitionFor(const QString &language)
         {QStringLiteral("ini"), QStringLiteral("INI Files")},
     };
 
+    // Finding a definition by file name tries every syntax's patterns, which
+    // adds up when a document has thousands of blocks in a language that is
+    // not known, so every answer is remembered.
+    static QHash<QString, KSyntaxHighlighting::Definition> found;
+    if (const auto it = found.constFind(language); it != found.constEnd())
+        return *it;
     auto &repo = repository();
     auto def = repo.definitionForName(aliases.value(language, language));
     if (!def.isValid())
         def = repo.definitionForFileName(QStringLiteral("x.") + language);
+    if (found.size() >= MaxRememberedLanguages)
+        found.clear(); // a document naming endless languages must not grow this forever
+    found.insert(language, def);
     return def;
 }
 
@@ -124,6 +134,12 @@ void CodeHighlighter::setDark(bool dark)
 void CodeHighlighter::clear()
 {
     m_cache.clear();
+}
+
+const HighlightedLines *CodeHighlighter::cached(const Block &block) const
+{
+    const auto it = m_cache.constFind(&block);
+    return it == m_cache.constEnd() || it->isEmpty() ? nullptr : &*it;
 }
 
 const HighlightedLines *CodeHighlighter::highlight(const Block &block)

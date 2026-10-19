@@ -72,9 +72,11 @@ inline constexpr qreal CellSlackPx = 1;
 // Line width used for "do not wrap": wider than anything that will be shown.
 constexpr qreal Unbounded = 1e6;
 
-// Fills `layout` from `doc`. Implemented by LayoutBuilder (layoutbuilder.cpp).
+// Fills `layout` from `doc`, taking text boxes from `previous` (see the
+// Layout constructor) where they match. Implemented by LayoutBuilder
+// (layoutbuilder.cpp).
 void buildLayout(Layout &layout, const Document &doc, const LayoutOptions &options, CodeHighlighter *highlighter,
-                 ImageSource *images);
+                 ImageSource *images, std::unique_ptr<Layout> previous);
 
 // Images that are not (yet) shown appear as a small chip with their alt text.
 inline QFont placeholderFont(const Theme &theme)

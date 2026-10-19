@@ -16,10 +16,10 @@ constexpr qreal VerticalDominance = 4096;
 } // namespace
 
 Layout::Layout(const Document &doc, const Theme &theme, const LayoutOptions &options, CodeHighlighter *highlighter,
-               ImageSource *images)
+               ImageSource *images, std::unique_ptr<Layout> previous)
     : m_theme(theme)
 {
-    buildLayout(*this, doc, options, highlighter, images);
+    buildLayout(*this, doc, options, highlighter, images, std::move(previous));
 }
 
 const Block *Layout::blockAt(qreal y) const

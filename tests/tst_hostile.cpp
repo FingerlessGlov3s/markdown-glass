@@ -106,6 +106,14 @@ void TestHostile::documents_data()
         "![j](fanout.svg) "
         "![f](https://127.0.0.1/x.png) ![g](data:image/svg+xml;base64,PHN2Zz48aW1hZ2UgaHJlZj0nL2V0Yy9wYXNzd2QnLz48L3N2Zz4=) "
         "![h](data:;base64,%%%) ![i](ftp://host/x.png)\n");
+    // Long enough to be laid out on several threads, with images throughout.
+    QTest::newRow("images in many blocks")
+        << QByteArray("![a](fake.png) text ![b](tall.svg)\n\n- ![c](fifo.png)\n\n|![d](fanout.svg)|\n|-|\n\n")
+               .repeated(1000);
+    // Nesting as deep as the parser keeps, in a document long enough to be
+    // laid out on several threads: the deepest part is built on a worker.
+    QTest::newRow("deep nesting on threads")
+        << QByteArray("Filler.\n\n").repeated(1200) + lists + QByteArray(20000, '>') + " x\n";
     QTest::newRow("many footnotes") << QByteArray("x[^a] ").repeated(2000) + "\n\n[^a]: note\n";
     QTest::newRow("many headings") << QByteArray("# h\n").repeated(20000);
     QTest::newRow("entities") << QByteArray("&#x110000; &#99999999999; &amp;amp; &#0; &#xD800; ").repeated(2000) + "\n";
@@ -151,18 +159,25 @@ void TestHostile::documents()
         options.width = 700;
         options.wrapCode = wrap;
         options.expandAllDetails = true;
-        const Layout layout(*doc, theme, options, &highlighter, &images);
-        QVERIFY(layout.height() >= 0);
+        auto layout = std::make_unique<Layout>(*doc, theme, options, &highlighter, &images);
+        QVERIFY(layout->height() >= 0);
 
         QImage image(700, 900, QImage::Format_RGB32);
         image.fill(Qt::white);
         QPainter p(&image);
-        layout.paint(p, QRectF(0, 0, 700, 900), PaintState());
+        layout->paint(p, QRectF(0, 0, 700, 900), PaintState());
         p.end();
 
-        layout.hitTest(QPointF(350, 450));
+        layout->hitTest(QPointF(350, 450));
         if (wrap)
-            QVERIFY(!paginate(layout, 1000).isEmpty());
+            QVERIFY(!paginate(*layout, 1000).isEmpty());
+
+        // Resizing reuses the text boxes of the layout before.
+        options.width = 500;
+        const Layout resized(*doc, theme, options, &highlighter, &images, std::move(layout));
+        QImage narrow(500, 900, QImage::Format_RGB32);
+        QPainter np(&narrow);
+        resized.paint(np, QRectF(0, 0, 500, 900), PaintState());
     }
     QVERIFY2(timer.elapsed() < 60000, "took too long");
     qInfo("%s: %lld ms", QTest::currentDataTag(), timer.elapsed());

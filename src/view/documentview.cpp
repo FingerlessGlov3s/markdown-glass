@@ -54,6 +54,7 @@ void DocumentView::rebuildTheme()
 {
     m_theme = Theme::fromPalette(palette(), m_zoom);
     m_highlighter->setDark(m_theme.dark);
+    m_boxesReusable = false;
     verticalScrollBar()->setSingleStep(qRound(m_theme.em(WheelLineStep)));
 }
 
@@ -96,9 +97,13 @@ void DocumentView::setDocument(std::unique_ptr<Document> doc, bool keepPosition)
             line = b->sourceLine;
             delta = scrollY() - m_layout->blockTop(b);
         }
+    } else if (keepPosition && m_layoutPending) {
+        line = m_pendingLine; // reloaded again before it was ever shown
+        delta = m_pendingDelta;
     }
 
     m_layout.reset(); // holds pointers into the old document
+    m_pendingBlock = nullptr;
     m_highlighter->clear();
     m_toggled.clear();
     m_anchor = m_cursor = Cursor();
@@ -111,13 +116,34 @@ void DocumentView::setDocument(std::unique_ptr<Document> doc, bool keepPosition)
     m_autoScroll.stop();
     m_doc = std::move(doc);
 
-    doLayout(nullptr, 0);
-    if (line >= 0 && m_layout) {
-        if (const Block *b = m_layout->blockForLine(line))
-            verticalScrollBar()->setValue(qRound(m_layout->blockTop(b) + delta));
+    m_pendingLine = line;
+    m_pendingDelta = delta;
+    m_layoutPending = true;
+    if (isVisible() || !m_doc) {
+        layOutPending();
     } else {
-        verticalScrollBar()->setValue(0);
+        // Laid out in showEvent(); meanwhile there is nothing to show.
+        runFind();
+        updateScrollRange();
+        updateFrameBars();
+        viewport()->update();
+        emit layoutChanged();
     }
+}
+
+void DocumentView::layOutPending()
+{
+    m_layoutPending = false;
+    doLayout(nullptr, 0);
+    verticalScrollBar()->setValue(0);
+    if (m_layout && m_pendingBlock) {
+        scrollToBlock(m_pendingBlock);
+    } else if (m_layout && m_pendingLine >= 0) {
+        if (const Block *b = m_layout->blockForLine(m_pendingLine))
+            verticalScrollBar()->setValue(qRound(m_layout->blockTop(b) + m_pendingDelta));
+    }
+    m_pendingBlock = nullptr;
+    m_pendingLine = -1;
     runFind();
 }
 
@@ -135,6 +161,7 @@ void DocumentView::setWrapCode(bool wrap)
     if (m_wrapCode == wrap)
         return;
     m_wrapCode = wrap;
+    m_boxesReusable = false;
     relayout();
 }
 
@@ -151,6 +178,8 @@ void DocumentView::setZoom(qreal zoom)
 
 void DocumentView::relayout()
 {
+    if (m_layoutPending)
+        return; // showEvent() lays out, at the size the view is shown at
     const Block *anchor = nullptr;
     qreal delta = 0;
     if (m_layout) {
@@ -183,16 +212,18 @@ void DocumentView::doLayout(const Block *anchorBlock, qreal anchorDelta)
     QElapsedTimer timer;
     timer.start();
 
-    const qreal margin = m_theme.contentMargin();
-    const qreal available = qMax(m_theme.minContentWidth(), viewport()->width() - 2 * margin);
     LayoutOptions options;
-    options.width = m_limitWidth ? qMin<qreal>(available, m_limitPixels) : available;
+    options.width = columnWidth();
     options.wrapCode = m_wrapCode;
     options.toggledDetails = &m_toggled;
-    m_contentX = std::floor(qMax(margin, (viewport()->width() - options.width) / 2));
+    m_contentX = columnX(options.width);
 
     const size_t oldBoxes = m_layout ? m_layout->texts.size() : 0;
-    m_layout = std::make_unique<Layout>(*m_doc, m_theme, options, m_highlighter.get(), m_images);
+    std::unique_ptr<Layout> previous;
+    if (m_boxesReusable)
+        previous = std::move(m_layout);
+    m_layout = std::make_unique<Layout>(*m_doc, m_theme, options, m_highlighter.get(), m_images, std::move(previous));
+    m_boxesReusable = true;
     m_lastLayoutMs = timer.elapsed();
 
     for (ScrollFrame &f : m_layout->frames)
@@ -220,6 +251,17 @@ void DocumentView::doLayout(const Block *anchorBlock, qreal anchorDelta)
     }
     viewport()->update();
     emit layoutChanged();
+}
+
+qreal DocumentView::columnWidth() const
+{
+    const qreal available = qMax(m_theme.minContentWidth(), viewport()->width() - 2 * m_theme.contentMargin());
+    return m_limitWidth ? qMin<qreal>(available, m_limitPixels) : available;
+}
+
+qreal DocumentView::columnX(qreal width) const
+{
+    return std::floor(qMax(m_theme.contentMargin(), (viewport()->width() - width) / 2));
 }
 
 void DocumentView::updateScrollRange()
@@ -289,6 +331,10 @@ int DocumentView::frameAt(const QPointF &docPoint) const
 
 void DocumentView::scrollToBlock(const Block *block)
 {
+    if (m_layoutPending) {
+        m_pendingBlock = block;
+        return;
+    }
     if (!m_layout || !block)
         return;
     const qreal top = m_layout->blockTop(block);
@@ -301,6 +347,8 @@ bool DocumentView::scrollToAnchor(const QString &anchor)
     if (!m_doc)
         return false;
     if (anchor.isEmpty()) {
+        m_pendingBlock = nullptr;
+        m_pendingLine = -1;
         verticalScrollBar()->setValue(0);
         return true;
     }
@@ -363,6 +411,17 @@ void DocumentView::resizeEvent(QResizeEvent *event)
         updateFrameBars();
         return;
     }
+    if (columnWidth() == m_layout->width()) {
+        // Wider than the width limit either way (or the preview strip was
+        // switched for a scrollbar): the text keeps its lines, and only the
+        // column moves to stay centred. No layout, so it moves at once.
+        m_resizeTimer.stop();
+        m_contentX = columnX(m_layout->width());
+        updateScrollRange();
+        updateFrameBars();
+        viewport()->update();
+        return;
+    }
     // Re-layout immediately while it is cheap; debounce for heavy documents.
     if (m_lastLayoutMs < CheapLayoutMs)
         relayout();
@@ -416,6 +475,24 @@ void DocumentView::leaveEvent(QEvent *event)
         m_hoverHref.clear();
         emit linkHovered(QString());
     }
+}
+
+void DocumentView::showEvent(QShowEvent *event)
+{
+    QAbstractScrollArea::showEvent(event);
+    if (!m_layoutPending)
+        return;
+    // Not yet: a window shows its children before itself, and the tab widget
+    // only sizes its pages in its own showEvent(), after this one. Laying out
+    // now would be at the old size and then again at the real one. Once the
+    // window has finished showing, the size is final.
+    QMetaObject::invokeMethod(
+        this,
+        [this] {
+            if (m_layoutPending && isVisible())
+                layOutPending();
+        },
+        Qt::QueuedConnection);
 }
 
 void DocumentView::changeEvent(QEvent *event)

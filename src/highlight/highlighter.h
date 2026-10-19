@@ -36,6 +36,9 @@ public:
 
     // Returns one list of ranges per line of block.code, or nullptr for plain text.
     const HighlightedLines *highlight(const Block &block);
+    // The same for a block highlight() has already seen, without highlighting
+    // anything. Safe to call from several threads while nothing highlights.
+    const HighlightedLines *cached(const Block &block) const;
 
     void clear();
 

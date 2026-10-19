@@ -11,6 +11,14 @@ progress goes under `## [Unreleased]`, which is not published.
 
 ## [Unreleased]
 
+- Very large documents open about three times faster and re-flow after a
+  window resize about five times faster, using several processor cores.
+- A document opening in a new window appears straight away at the window's
+  width, instead of first in a narrow column.
+- Turning the document preview on or off, or resizing a window that stays
+  wider than the reading width, moves the text at once instead of after a
+  pause.
+
 ## [0.1.0] - 2026-10-06
 
 First release.

@@ -88,6 +88,7 @@ protected:
     void contextMenuEvent(QContextMenuEvent *event) override;
     void leaveEvent(QEvent *event) override;
     void changeEvent(QEvent *event) override;
+    void showEvent(QShowEvent *event) override;
     void timerEvent(QTimerEvent *event) override;
 
 private:
@@ -111,6 +112,9 @@ private:
 
     void rebuildTheme();
     void doLayout(const md::Block *anchorBlock, qreal anchorDelta);
+    void layOutPending();
+    qreal columnWidth() const;        // the width text is laid out at, for the viewport's width
+    qreal columnX(qreal width) const; // where a column that wide starts, centred in the viewport
     void updateScrollRange();
     void updateFrameBars();
     void updateHover(const QPoint &viewportPos);
@@ -164,4 +168,15 @@ private:
     QList<QScrollBar *> m_frameBars;
     QBasicTimer m_resizeTimer;
     qint64 m_lastLayoutMs = 0;
+    // False after a change that alters how text is shaped (theme, zoom, code
+    // wrapping), when the next layout must not reuse the current one's boxes.
+    bool m_boxesReusable = false;
+    // A document set while the view is hidden (a window not shown yet, a
+    // background tab) is laid out when it is shown: until then the view's
+    // size is not the one it will have, and a large document is expensive to
+    // lay out twice. Where to scroll to once it is laid out:
+    bool m_layoutPending = false;
+    int m_pendingLine = -1; // a source line and the offset from its block, after a reload
+    qreal m_pendingDelta = 0;
+    const md::Block *m_pendingBlock = nullptr; // or a block, such as a link's #anchor
 };

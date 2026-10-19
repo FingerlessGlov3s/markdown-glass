@@ -51,7 +51,8 @@ public:
     QRectF rect() const { return QRectF(pos, QSizeF(width, height)); }
 
     // (Re)computes line breaks for the given width. Images are scaled down to
-    // imageMaxWidth (the available width if negative).
+    // imageMaxWidth (the available width if negative). Lines the new width
+    // cannot change are kept as they are.
     void doLayout(qreal availableWidth, QTextOption::WrapMode mode, qreal imageMaxWidth = -1);
 
     // Text offset nearest to a point given relative to pos.
@@ -69,12 +70,19 @@ public:
 private:
     friend class LayoutBuilder;
     void applyImageSpacing(qreal imageMaxWidth);
+    bool linesFit(qreal availableWidth, QTextOption::WrapMode mode) const;
 
     qreal m_lineHeight = 0;
     qreal m_tabStop = 0;
     Qt::Alignment m_align = Qt::AlignLeft;
     QList<QTextLayout::FormatRange> m_baseFormats;
     QList<qreal> m_lineTops; // size = lineCount + 1
+    bool m_laidOut = false;
+    QTextOption::WrapMode m_mode = QTextOption::NoWrap; // of the last doLayout()
+    // A table cell's widest and narrowest widths, measured once and kept
+    // when the box is reused at another width; negative until measured.
+    qreal m_widest = -1;
+    qreal m_narrowest = -1;
 };
 
 struct Deco {
@@ -114,6 +122,9 @@ struct LayoutOptions {
     // Details blocks whose open state the user flipped from the document's default.
     const QSet<const Block *> *toggledDetails = nullptr;
     bool expandAllDetails = false; // printing: paper cannot be clicked
+    // Threads a large document is laid out on: 0 for as many as help, 1 to
+    // stay on the calling thread.
+    int maxThreads = 0;
 };
 
 struct FindMatch {
@@ -156,8 +167,14 @@ struct Hit {
 class Layout
 {
 public:
+    // `previous`, if given, is a layout of the same document made with the
+    // same theme, highlighting and wrapCode option. Its text boxes are taken
+    // over rather than built again, which makes re-layout after a resize much
+    // cheaper. It may differ in width, loaded images and opened details
+    // blocks: boxes are reused only while they match the block and text
+    // being built, and boxes with images are always built again.
     Layout(const Document &doc, const Theme &theme, const LayoutOptions &options, CodeHighlighter *highlighter,
-           ImageSource *images);
+           ImageSource *images, std::unique_ptr<Layout> previous = nullptr);
 
     qreal width() const { return m_width; }
     qreal height() const { return m_height; }
@@ -185,14 +202,22 @@ public:
 
 private:
     friend class LayoutBuilder;
+    // An empty layout, filled by LayoutBuilder with one part of a document.
+    explicit Layout(const Theme &theme)
+        : m_theme(theme)
+    { }
     void paintDeco(QPainter &p, const Deco &d) const;
     void paintText(QPainter &p, int index, const PaintState &state) const;
 
     Theme m_theme;
+    const Document *m_doc = nullptr; // a later layout reuses boxes only for the same document
     qreal m_width = 0;
     qreal m_height = 0;
     QHash<const Block *, qreal> m_blockTops;
     QList<QPair<qreal, const Block *>> m_blockOrder;
+    // Index in `texts` of the first box of each top-level block, so a later
+    // layout built in parts knows which boxes each part may reuse.
+    std::vector<size_t> m_topBoxStart;
 };
 
 } // namespace md

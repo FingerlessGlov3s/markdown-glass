@@ -19,8 +19,10 @@ exec "$HERE/container.sh" env JOBS="$JOBS" WERROR="$WERROR" bash -c '
     export QT_QPA_PLATFORM=offscreen XDG_CONFIG_HOME=/tmp/cfg
     # A fresh build each time: leftover data from renamed files corrupts the report.
     rm -rf build/coverage
+    # Large documents are laid out on several threads; atomic counters keep
+    # their hits from being lost or going negative.
     cmake -S . -B build/coverage -G Ninja -DCMAKE_BUILD_TYPE=Debug -DMDGLASS_WERROR="$WERROR" \
-        -DCMAKE_CXX_FLAGS="--coverage -O0" -DCMAKE_EXE_LINKER_FLAGS=--coverage >/dev/null
+        -DCMAKE_CXX_FLAGS="--coverage -fprofile-update=atomic -O0" -DCMAKE_EXE_LINKER_FLAGS=--coverage >/dev/null
     cmake --build build/coverage --parallel "$JOBS" >/dev/null
     ctest --test-dir build/coverage --output-on-failure
     gcovr -r . --filter src/ --exclude ".*_autogen.*" build/coverage \

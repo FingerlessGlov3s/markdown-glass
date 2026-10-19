@@ -8,6 +8,7 @@
 #include <QMouseEvent>
 #include <QScrollBar>
 #include <QSignalSpy>
+#include <QTabWidget>
 #include <QTemporaryDir>
 #include <QTest>
 
@@ -27,6 +28,10 @@ private slots:
     void detailsToggle();
     void detailsCloseAgainOnReload();
     void findAndAnchors();
+    void hiddenViewLaysOutWhenShown();
+    void firstLayoutAtShownSize();
+    void resizeWiderThanLimitOnlyRecentres();
+    void restyleRebuildsBoxes();
     void findBackwardsWithoutCurrentMatch();
     void findKeepsLastMatchWhenFewerRemain();
     void lostReleaseEndsDrag();
@@ -280,6 +285,117 @@ void TestView::findAndAnchors()
     QVERIFY(m_view->verticalScrollBar()->value() > 500);
     QCOMPARE(m_view->currentHeading()->anchor, QStringLiteral("far-away"));
     QVERIFY(!m_view->scrollToAnchor(QStringLiteral("nope")));
+}
+
+void TestView::hiddenViewLaysOutWhenShown()
+{
+    QByteArray source = "# Top\n\n";
+    for (int i = 0; i < 80; ++i)
+        source += "Filler paragraph number " + QByteArray::number(i) + ".\n\n";
+    source += "## Far Away\n\nThe end.\n";
+
+    // As in a window not shown yet: the size the view will have is not known
+    // until it is shown, so laying out before then would be wasted.
+    m_view->hide();
+    m_view->resize(500, 400);
+    load(source);
+    QVERIFY(!m_view->documentLayout());
+    QVERIFY(m_view->scrollToAnchor(QStringLiteral("far-away")));
+    m_view->relayout(); // say, an image arriving: still waits
+    QVERIFY(!m_view->documentLayout());
+
+    m_view->show();
+    QVERIFY(QTest::qWaitForWindowExposed(m_view.get()));
+    QTRY_VERIFY(m_view->documentLayout());
+    QVERIFY(m_view->documentLayout()->width() < 500);
+    QVERIFY(m_view->verticalScrollBar()->value() > 500);
+    QCOMPARE(m_view->currentHeading()->anchor, QStringLiteral("far-away"));
+
+    // Reloading a hidden view (a background tab), even twice before it is
+    // shown again, keeps the reader's place.
+    m_view->verticalScrollBar()->setValue(m_view->verticalScrollBar()->value() - 300);
+    const int place = m_view->verticalScrollBar()->value();
+    m_view->hide();
+    m_view->setDocument(parseMarkdown(source), true);
+    QVERIFY(!m_view->documentLayout());
+    m_view->setDocument(parseMarkdown(source), true);
+    m_view->show();
+    QVERIFY(QTest::qWaitForWindowExposed(m_view.get()));
+    QTRY_VERIFY(m_view->documentLayout());
+    QCOMPARE(m_view->verticalScrollBar()->value(), place);
+
+    // A different file opened while hidden starts at the top, even after an
+    // anchor was asked for in the one before it (which is gone by then).
+    m_view->hide();
+    QVERIFY(m_view->scrollToAnchor(QStringLiteral("far-away")));
+    load(source);
+    m_view->show();
+    QVERIFY(QTest::qWaitForWindowExposed(m_view.get()));
+    QTRY_VERIFY(m_view->documentLayout());
+    QCOMPARE(m_view->verticalScrollBar()->value(), 0);
+}
+
+void TestView::firstLayoutAtShownSize()
+{
+    // As in the main window: the view is a tab page, given its document
+    // before the window is shown. A tab widget sizes its pages only after the
+    // pages have been told they are shown, so laying out right then would use
+    // the old size and lay out again at the real one.
+    QTabWidget tabs;
+    tabs.resize(900, 600);
+    auto *view = new DocumentView;
+    // With the minimap, which stands in for it; a scrollbar appearing would
+    // narrow the view and lay it out again.
+    view->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    tabs.addTab(view, QStringLiteral("doc"));
+    view->setDocument(parseMarkdown(QByteArray("Some words to wrap. ").repeated(400) + "\n"));
+    QSignalSpy laidOut(view, &DocumentView::layoutChanged);
+    tabs.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&tabs));
+    QTRY_VERIFY(view->documentLayout());
+    QTest::qWait(300); // longer than a resize waits before laying out again
+    QCOMPARE(laidOut.count(), 1);
+    QVERIFY(view->documentLayout()->width() > 600);
+}
+
+void TestView::resizeWiderThanLimitOnlyRecentres()
+{
+    // No scrollbar coming and going (as with the minimap), so the viewport
+    // narrows by exactly as much as the view.
+    m_view->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    load(QByteArray("word ").repeated(300) + "\n");
+    m_view->setWidthLimit(true, 400);
+    const int left = toViewport(QPointF(0, 0)).x();
+    QSignalSpy laidOut(m_view.get(), &DocumentView::layoutChanged);
+
+    // Still wider than the limit: the column keeps its lines and moves at
+    // once to stay centred, without waiting for a layout.
+    m_view->resize(m_view->width() - 200, m_view->height());
+    QCOMPARE(laidOut.count(), 0);
+    const int moved = toViewport(QPointF(0, 0)).x();
+    QVERIFY2(qAbs(moved - (left - 100)) <= 1, qPrintable(QStringLiteral("from %1 to %2").arg(left).arg(moved)));
+    QCOMPARE(m_view->documentLayout()->width(), 400.0);
+
+    // Narrower than the limit: the lines have to change.
+    m_view->resize(300, m_view->height());
+    QTRY_VERIFY(m_view->documentLayout()->width() < 400);
+}
+
+void TestView::restyleRebuildsBoxes()
+{
+    // Zoom and colours change how the text is drawn, so the boxes of the
+    // layout before cannot be reused.
+    load("Some text\n\n```cpp\nint x = 1;\n```\n");
+    const auto box = [this] { return m_view->documentLayout()->texts[0].get(); };
+    const int pixels = box()->layout.font().pixelSize();
+    m_view->setZoom(2);
+    QVERIFY(box()->layout.font().pixelSize() > pixels);
+
+    const QColor before = box()->layout.formats().first().format.foreground().color();
+    QPalette palette = m_view->palette();
+    palette.setColor(QPalette::Text, before == QColor(Qt::darkRed) ? Qt::darkBlue : Qt::darkRed);
+    m_view->setPalette(palette);
+    QVERIFY(box()->layout.formats().first().format.foreground().color() != before);
 }
 
 void TestView::widthLimitAndWrap()

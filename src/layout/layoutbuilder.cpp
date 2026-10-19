@@ -8,8 +8,11 @@
 #include "highlight/highlighter.h"
 
 #include <QFontMetricsF>
+#include <QThread>
 
 #include <cmath>
+#include <system_error>
+#include <thread>
 
 namespace md {
 
@@ -65,6 +68,70 @@ const InlineText &defaultSummary()
     return summary;
 }
 
+// The parser already caps nesting (Converter::MaxDepth, model/converter.h);
+// this is a second bound so layout recursion stays safe on its own.
+constexpr int MaxNesting = 100;
+
+// A document this long (in source lines) is laid out in parts on several
+// threads; for shorter ones starting the threads costs more than it saves.
+constexpr int ParallelMinLines = 2000;
+// Qt serialises font lookups behind one lock, so more threads gain nothing:
+// on a 6.5 MB manual 8 threads were 3.7 times faster than one, 12 no faster.
+constexpr int MaxLayoutThreads = 8;
+
+using BlockList = std::vector<std::unique_ptr<Block>>;
+
+// Where each part of a parallel layout starts: indices into the top-level
+// blocks, splitting the source into runs of about equal length. Just {0}
+// when the document is laid out in one piece.
+std::vector<size_t> partStarts(const BlockList &blocks, int threads)
+{
+    std::vector<size_t> starts {0};
+    int lines = 0;
+    for (const auto &b : blocks)
+        lines = qMax(lines, b->sourceLine);
+    if (lines < ParallelMinLines || threads < 2)
+        return starts;
+    const qint64 parts = qMin<qint64>(threads, qint64(blocks.size()));
+    int seen = 0; // footnotes come last whatever their line, so take the highest yet
+    for (size_t i = 1; i < blocks.size() && qint64(starts.size()) < parts; ++i) {
+        seen = qMax(seen, blocks[i]->sourceLine);
+        if (seen >= lines * qint64(starts.size()) / parts)
+            starts.push_back(i);
+    }
+    return starts;
+}
+
+// The builder's questions about images, answered ahead of time on the UI
+// thread for the threads that build parts of a layout: ImageLoader lives on
+// the UI thread and must not be called from others.
+class ImageAnswers : public ImageSource
+{
+public:
+    void ask(ImageSource &source, const QString &src)
+    {
+        if (m_answers.contains(src))
+            return;
+        Answer a;
+        a.state = source.request(src);
+        if (a.state == Ready)
+            a.size = source.naturalSize(src);
+        m_answers.insert(src, a);
+    }
+
+    // Only reads, so several threads may call these at once.
+    State request(const QString &src) override { return m_answers.value(src).state; }
+    QSizeF naturalSize(const QString &src) override { return m_answers.value(src).size; }
+    void paint(QPainter &, const QString &, const QRectF &, bool) override { } // the builder never paints
+
+private:
+    struct Answer {
+        State state = Failed;
+        QSizeF size;
+    };
+    QHash<QString, Answer> m_answers;
+};
+
 } // namespace
 
 class LayoutBuilder
@@ -78,19 +145,71 @@ public:
         , m_images(images)
     { }
 
-    void run(const Document &doc)
+    void run(const Document &doc, std::unique_ptr<Layout> previous)
     {
-        Ctx ctx;
-        ctx.x = 0;
-        ctx.width = m_options.width;
-        blocks(doc.blocks, ctx);
+        const int threads =
+            m_options.maxThreads > 0 ? m_options.maxThreads : qMin(QThread::idealThreadCount(), MaxLayoutThreads);
+        const std::vector<size_t> starts = partStarts(doc.blocks, threads);
+        const auto partEnd = [&](size_t k) { return k + 1 < starts.size() ? starts[k + 1] : doc.blocks.size(); };
+
+        // The earlier layout's boxes, split the same way.
+        std::vector<std::vector<std::unique_ptr<TextBox>>> reusable(starts.size());
+        m_layout.m_doc = &doc;
+        if (previous && previous->m_doc == &doc && previous->m_topBoxStart.size() == doc.blocks.size()) {
+            auto &old = previous->texts;
+            const auto boxStart = [&](size_t block) {
+                return qsizetype(block < doc.blocks.size() ? previous->m_topBoxStart[block] : old.size());
+            };
+            for (size_t k = 0; k < starts.size(); ++k) {
+                reusable[k].assign(std::make_move_iterator(old.begin() + boxStart(starts[k])),
+                                   std::make_move_iterator(old.begin() + boxStart(partEnd(k))));
+            }
+        }
         m_layout.m_width = m_options.width;
+
+        if (starts.size() == 1) {
+            m_reusable = std::move(reusable[0]);
+            topLevel(doc.blocks, 0, doc.blocks.size());
+            m_layout.m_height = m_y;
+            return;
+        }
+
+        ImageAnswers answers;
+        prepare(doc.blocks, 0, answers);
+        std::vector<std::unique_ptr<Layout>> parts(starts.size());
+        const auto buildPart = [&](size_t k) {
+            LayoutBuilder part(*parts[k], m_options, m_highlighter, m_images ? &answers : nullptr);
+            part.m_onWorker = true;
+            part.m_reusable = std::move(reusable[k]);
+            part.topLevel(doc.blocks, starts[k], partEnd(k));
+            parts[k]->m_height = part.m_y;
+        };
+        std::vector<std::thread> workers;
+        for (size_t k = 0; k < starts.size(); ++k) {
+            parts[k].reset(new Layout(m_theme));
+            try {
+                workers.emplace_back(buildPart, k);
+            } catch (const std::system_error &) {
+                buildPart(k); // no thread to be had (a process or memory limit): build it here
+            }
+        }
+        for (std::thread &t : workers)
+            t.join();
+
+        size_t boxes = 0;
+        for (const auto &part : parts)
+            boxes += part->texts.size();
+        m_layout.texts.reserve(boxes);
+        for (size_t k = 0; k < parts.size(); ++k) {
+            if (k > 0)
+                m_y += gap(*doc.blocks[starts[k] - 1], *doc.blocks[starts[k]], topCtx());
+            append(*parts[k], m_y);
+            m_y += parts[k]->m_height;
+        }
         m_layout.m_height = m_y;
     }
 
 private:
-    using BlockList = std::vector<std::unique_ptr<Block>>;
-
     struct Ctx {
         qreal x = 0;
         qreal width = 0;
@@ -100,6 +219,126 @@ private:
         int listDepth = 0;
         int depth = 0; // nesting of containers; see blocks()
     };
+
+    // The context of the top-level blocks, as blocks() makes it for them.
+    Ctx topCtx() const
+    {
+        Ctx ctx;
+        ctx.width = m_options.width;
+        ctx.depth = 1;
+        return ctx;
+    }
+
+    // Lays out top-level blocks [begin, end), as blocks() would, noting where
+    // each one's boxes start.
+    void topLevel(const BlockList &list, size_t begin, size_t end)
+    {
+        m_layout.texts.reserve(m_reusable.size());
+        const Ctx ctx = topCtx();
+        for (size_t i = begin; i < end; ++i) {
+            if (i > begin)
+                m_y += gap(*list[i - 1], *list[i], ctx);
+            m_layout.m_topBoxStart.push_back(m_layout.texts.size());
+            block(*list[i], ctx);
+        }
+    }
+
+    // Done on the UI thread before parts are built on others: highlights the
+    // code blocks and asks about the images that the layout will show, the
+    // two things the builder needs that may not be used from other threads.
+    // Visits exactly the blocks that blocks() lays out.
+    void prepare(const BlockList &list, int depth, ImageAnswers &answers)
+    {
+        if (depth >= MaxNesting)
+            return;
+        ++depth;
+        for (const auto &b : list) {
+            switch (b->type) {
+            case Block::Paragraph:
+            case Block::Heading:
+                prepareInline(b->inl, answers);
+                break;
+            case Block::CodeBlock:
+                if (m_highlighter)
+                    m_highlighter->highlight(*b);
+                break;
+            case Block::Table:
+                for (const QList<InlineText> &row : std::as_const(b->rows)) {
+                    for (const InlineText &cell : row)
+                        prepareInline(cell, answers);
+                }
+                break;
+            case Block::List:
+                for (const auto &item : b->children)
+                    prepare(item->children, depth, answers);
+                break;
+            case Block::Details:
+                prepareInline(b->inl, answers);
+                if (detailsOpen(*b))
+                    prepare(b->children, depth, answers);
+                break;
+            default:
+                prepare(b->children, depth, answers);
+                break;
+            }
+        }
+    }
+
+    void prepareInline(const InlineText &inl, ImageAnswers &answers)
+    {
+        if (!m_images)
+            return;
+        for (const InlineImage &img : inl.images)
+            answers.ask(*m_images, img.src);
+    }
+
+    // Moves a part built on another thread into this layout, `dy` lower.
+    void append(Layout &part, qreal dy)
+    {
+        const int frameBase = int(m_layout.frames.size());
+        const size_t boxBase = m_layout.texts.size();
+        const auto frame = [frameBase](int f) { return f >= 0 ? f + frameBase : f; };
+        for (auto &box : part.texts) {
+            box->pos.ry() += dy;
+            box->frame = frame(box->frame);
+            // A QTextLayout keeps the font engine it last used, and engines
+            // belong to the thread that loaded them: drop it, so painting
+            // here loads this thread's own.
+            box->layout.setFont(box->layout.font());
+            m_layout.texts.push_back(std::move(box));
+        }
+        for (Deco &d : part.decos) {
+            d.rect.translate(0, dy);
+            d.frame = frame(d.frame);
+            m_layout.decos.push_back(std::move(d));
+        }
+        for (ScrollFrame &f : part.frames) {
+            f.rect.translate(0, dy);
+            m_layout.frames.push_back(f);
+        }
+        for (CodeArea &a : part.codeAreas) {
+            a.rect.translate(0, dy);
+            m_layout.codeAreas.push_back(a);
+        }
+        for (ToggleArea &t : part.toggles) {
+            t.rect.translate(0, dy);
+            m_layout.toggles.push_back(t);
+        }
+        for (const auto &[top, bottom] : std::as_const(part.unbreakable))
+            m_layout.unbreakable.append({top + dy, bottom + dy});
+        for (auto it = part.m_blockTops.cbegin(); it != part.m_blockTops.cend(); ++it)
+            m_layout.m_blockTops.insert(it.key(), it.value() + dy);
+        for (const auto &[top, block] : std::as_const(part.m_blockOrder))
+            m_layout.m_blockOrder.append({top + dy, block});
+        for (size_t start : part.m_topBoxStart)
+            m_layout.m_topBoxStart.push_back(start + boxBase);
+    }
+
+    bool detailsOpen(const Block &b) const
+    {
+        const bool toggled = m_options.toggledDetails && m_options.toggledDetails->contains(&b);
+        return m_options.expandAllDetails || b.open != toggled;
+    }
 
     struct Style {
         QFont font;
@@ -173,8 +412,30 @@ private:
         return f;
     }
 
-    std::unique_ptr<TextBox> makeBox(const InlineText &inl, const Style &style, const Block *block) const
+    // The earlier layout's next box, if it is the one about to be built: with
+    // only the width changed, boxes come in the same order. Boxes with
+    // images are built again, as their images may have loaded since.
+    std::unique_ptr<TextBox> reuse(const Block *block, const InlineText *inl)
     {
+        if (m_nextReusable >= m_reusable.size())
+            return nullptr;
+        std::unique_ptr<TextBox> &box = m_reusable[m_nextReusable];
+        if (box->block != block || box->inl != inl) {
+            m_nextReusable = m_reusable.size(); // out of step: build the rest afresh
+            return nullptr;
+        }
+        ++m_nextReusable;
+        if (!box->images.isEmpty())
+            return nullptr;
+        box->frame = -1;
+        box->separator = QStringLiteral("\n"); // as for a new box; callers set the rest
+        return std::move(box);
+    }
+
+    std::unique_ptr<TextBox> makeBox(const InlineText &inl, const Style &style, const Block *block)
+    {
+        if (auto reused = reuse(block, &inl))
+            return reused;
         auto box = std::make_unique<TextBox>();
         box->block = block;
         box->inl = &inl;
@@ -237,9 +498,6 @@ private:
 
     void blocks(const BlockList &list, const Ctx &parent)
     {
-        // The parser already caps nesting (Converter::MaxDepth, model/converter.h); this is a
-        // second bound so layout recursion stays safe on its own.
-        constexpr int MaxNesting = 100;
         if (parent.depth >= MaxNesting)
             return;
         Ctx ctx = parent;
@@ -349,7 +607,10 @@ private:
         QFont font = m_theme.mono;
         const qreal lineHeight = std::round(font.pixelSize() * Metrics::CodeLineHeight);
         const qreal tabStop = QFontMetricsF(font).horizontalAdvance(u' ') * Metrics::TabWidthSpaces;
-        const HighlightedLines *highlighted = m_highlighter ? m_highlighter->highlight(b) : nullptr;
+        // On a worker, prepare() has highlighted everything already.
+        const HighlightedLines *highlighted = !m_highlighter ? nullptr
+            : m_onWorker                                     ? m_highlighter->cached(b)
+                                                             : m_highlighter->highlight(b);
         const QColor color = ctx.muted ? m_theme.muted : m_theme.text;
 
         const size_t decoIndex = m_layout.decos.size();
@@ -363,16 +624,19 @@ private:
         const QList<QStringView> lines = codeLines(b.code);
         for (int lineNo = 0; lineNo < lines.size(); ++lineNo) {
             const QStringView line = lines[lineNo];
-            auto box = std::make_unique<TextBox>();
-            box->block = &b;
-            box->isCode = true;
-            box->layout.setText(line.toString());
-            box->layout.setFont(font);
-            box->m_lineHeight = lineHeight;
-            box->m_tabStop = tabStop;
-            const QList<HighlightRange> *ranges =
-                highlighted && lineNo < highlighted->size() ? &highlighted->at(lineNo) : nullptr;
-            box->layout.setFormats(codeLineFormats(int(line.size()), ranges, font, color));
+            std::unique_ptr<TextBox> box = reuse(&b, nullptr);
+            if (!box) {
+                box = std::make_unique<TextBox>();
+                box->block = &b;
+                box->isCode = true;
+                box->layout.setText(line.toString());
+                box->layout.setFont(font);
+                box->m_lineHeight = lineHeight;
+                box->m_tabStop = tabStop;
+                const QList<HighlightRange> *ranges =
+                    highlighted && lineNo < highlighted->size() ? &highlighted->at(lineNo) : nullptr;
+                box->layout.setFormats(codeLineFormats(int(line.size()), ranges, font, color));
+            }
             box->doLayout(innerWidth, mode);
             widest = qMax(widest, box->naturalWidth);
             const qreal h = box->height;
@@ -541,7 +805,7 @@ private:
         int frame = -1;            // scroll frame, if the table is wider than the column
     };
 
-    TableCells measureTableCells(const Block &b, const Ctx &ctx) const
+    TableCells measureTableCells(const Block &b, const Ctx &ctx)
     {
         const int rows = int(b.rows.size());
         const int cols = int(b.columns.size());
@@ -556,12 +820,14 @@ private:
                     s.font.setWeight(QFont::DemiBold);
                 s.align = toQt(b.columns[c], r == 0 ? Qt::AlignHCenter : Qt::AlignLeft);
                 auto box = makeBox(b.rows[r][c], s, &b);
-                box->doLayout(Unbounded, QTextOption::NoWrap, ctx.width);
-                const qreal widest = std::ceil(box->naturalWidth) + Metrics::CellSlackPx;
-                box->doLayout(1, QTextOption::WordWrap, ctx.width);
-                const qreal narrowest = qMin(widest, std::ceil(box->naturalWidth) + Metrics::CellSlackPx);
-                cells.maxWidth[c] = qMax(cells.maxWidth[c], widest);
-                cells.minWidth[c] = qMax(cells.minWidth[c], narrowest);
+                if (box->m_widest < 0) {
+                    box->doLayout(Unbounded, QTextOption::NoWrap, ctx.width);
+                    box->m_widest = std::ceil(box->naturalWidth) + Metrics::CellSlackPx;
+                    box->doLayout(1, QTextOption::WordWrap, ctx.width);
+                    box->m_narrowest = qMin(box->m_widest, std::ceil(box->naturalWidth) + Metrics::CellSlackPx);
+                }
+                cells.maxWidth[c] = qMax(cells.maxWidth[c], box->m_widest);
+                cells.minWidth[c] = qMax(cells.minWidth[c], box->m_narrowest);
                 cells.boxes[r].push_back(std::move(box));
             }
         }
@@ -625,8 +891,7 @@ private:
 
     void details(const Block &b, const Ctx &ctx)
     {
-        const bool toggled = m_options.toggledDetails && m_options.toggledDetails->contains(&b);
-        const bool open = m_options.expandAllDetails || b.open != toggled;
+        const bool open = detailsOpen(b);
         const Style style = bodyStyle(ctx);
         const qreal top = m_y;
 
@@ -687,13 +952,16 @@ private:
     const LayoutOptions &m_options;
     CodeHighlighter *m_highlighter;
     ImageSource *m_images;
+    std::vector<std::unique_ptr<TextBox>> m_reusable;
+    size_t m_nextReusable = 0;
+    bool m_onWorker = false; // building one part of a parallel layout
     qreal m_y = 0;
 };
 
 void buildLayout(Layout &layout, const Document &doc, const LayoutOptions &options, CodeHighlighter *highlighter,
-                 ImageSource *images)
+                 ImageSource *images, std::unique_ptr<Layout> previous)
 {
-    LayoutBuilder(layout, options, highlighter, images).run(doc);
+    LayoutBuilder(layout, options, highlighter, images).run(doc, std::move(previous));
 }
 
 } // namespace md
